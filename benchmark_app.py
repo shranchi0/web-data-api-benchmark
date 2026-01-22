@@ -393,6 +393,27 @@ with tab2:
 
         results_container = st.container()
 
+        # Initialize all result variables to avoid undefined errors
+        zipf_session_all_urls = []
+        zipf_session_unique = set()
+        zipf_session_duplicates = 0
+        zipf_session_success = False
+
+        zipf_nosession_all_urls = []
+        zipf_nosession_unique = set()
+        zipf_nosession_duplicates = 0
+        zipf_nosession_success = False
+
+        exa_all_urls = []
+        exa_unique = set()
+        exa_duplicates = 0
+        exa_success = False
+
+        fc_all_urls = []
+        fc_unique = set()
+        fc_duplicates = 0
+        fc_success = False
+
         with results_container:
             # ============================================================
             # TEST ZIPF WITH SESSIONS
@@ -405,53 +426,56 @@ with tab2:
                 zipf = clients["Zipf.ai"]
 
                 with st.spinner("Creating session and running searches..."):
-                    # Create session
-                    session_result = zipf._request("POST", "/sessions", {
-                        "name": f"benchmark_session_{datetime.now().strftime('%H%M%S')}",
-                        "description": "Deduplication test"
-                    })
+                    try:
+                        # Create session
+                        session_result = zipf._request("POST", "/sessions", {
+                            "name": f"benchmark_session_{datetime.now().strftime('%H%M%S')}",
+                            "description": "Deduplication test"
+                        })
 
-                    session_data = session_result.get("session", session_result)
-                    session_id = session_data.get("id")
+                        session_data = session_result.get("session", session_result)
+                        session_id = session_data.get("id")
 
-                    if not session_id:
-                        st.error(f"Failed to create session: {session_result}")
-                    else:
-                        zipf_session_results = []
-                        zipf_session_all_urls = []
-
-                        for q in queries:
-                            result = zipf.search(q, max_results=results_per_query, session_id=session_id)
-                            urls = [r.get("url", "") for r in result.get("results", [])]
-                            zipf_session_results.append({
-                                "query": q,
-                                "urls": urls,
-                                "count": len(urls)
-                            })
-                            zipf_session_all_urls.extend(urls)
-
-                        # Cleanup session
-                        zipf._request("DELETE", f"/sessions/{session_id}")
-
-                        # Analyze
-                        zipf_session_unique = set(zipf_session_all_urls)
-                        zipf_session_duplicates = len(zipf_session_all_urls) - len(zipf_session_unique)
-
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("Total URLs returned", len(zipf_session_all_urls))
-                        col2.metric("Unique URLs", len(zipf_session_unique))
-                        col3.metric("Duplicates", zipf_session_duplicates,
-                                   delta="GOOD" if zipf_session_duplicates == 0 else "BAD",
-                                   delta_color="normal" if zipf_session_duplicates == 0 else "inverse")
-
-                        if zipf_session_duplicates == 0:
-                            st.success("Session deduplication WORKING - no duplicate URLs")
+                        if not session_id:
+                            st.error(f"Failed to create session: {session_result}")
                         else:
-                            st.error(f"Session deduplication FAILED - {zipf_session_duplicates} duplicates found")
+                            zipf_session_results = []
 
-                        with st.expander("Details by query"):
-                            for r in zipf_session_results:
-                                st.write(f"**{r['query'][:50]}...** → {r['count']} URLs")
+                            for q in queries:
+                                result = zipf.search(q, max_results=results_per_query, session_id=session_id)
+                                urls = [r.get("url", "") for r in result.get("results", [])]
+                                zipf_session_results.append({
+                                    "query": q,
+                                    "urls": urls,
+                                    "count": len(urls)
+                                })
+                                zipf_session_all_urls.extend(urls)
+
+                            # Cleanup session
+                            zipf._request("DELETE", f"/sessions/{session_id}")
+
+                            # Analyze
+                            zipf_session_unique = set(zipf_session_all_urls)
+                            zipf_session_duplicates = len(zipf_session_all_urls) - len(zipf_session_unique)
+                            zipf_session_success = True
+
+                            col1, col2, col3 = st.columns(3)
+                            col1.metric("Total URLs returned", len(zipf_session_all_urls))
+                            col2.metric("Unique URLs", len(zipf_session_unique))
+                            col3.metric("Duplicates", zipf_session_duplicates,
+                                       delta="GOOD" if zipf_session_duplicates == 0 else "BAD",
+                                       delta_color="normal" if zipf_session_duplicates == 0 else "inverse")
+
+                            if zipf_session_duplicates == 0:
+                                st.success("Session deduplication WORKING - no duplicate URLs")
+                            else:
+                                st.error(f"Session deduplication FAILED - {zipf_session_duplicates} duplicates found")
+
+                            with st.expander("Details by query"):
+                                for r in zipf_session_results:
+                                    st.write(f"**{r['query'][:50]}...** → {r['count']} URLs")
+                    except Exception as e:
+                        st.error(f"Error during Zipf session test: {str(e)}")
 
             # ============================================================
             # TEST ZIPF WITHOUT SESSIONS (control)
@@ -460,28 +484,31 @@ with tab2:
 
             if "Zipf.ai" in clients:
                 with st.spinner("Running searches without session..."):
-                    zipf_nosession_results = []
-                    zipf_nosession_all_urls = []
+                    try:
+                        zipf_nosession_results = []
 
-                    for q in queries:
-                        result = zipf.search(q, max_results=results_per_query)  # No session_id
-                        urls = [r.get("url", "") for r in result.get("results", [])]
-                        zipf_nosession_results.append({
-                            "query": q,
-                            "urls": urls,
-                            "count": len(urls)
-                        })
-                        zipf_nosession_all_urls.extend(urls)
+                        for q in queries:
+                            result = zipf.search(q, max_results=results_per_query)  # No session_id
+                            urls = [r.get("url", "") for r in result.get("results", [])]
+                            zipf_nosession_results.append({
+                                "query": q,
+                                "urls": urls,
+                                "count": len(urls)
+                            })
+                            zipf_nosession_all_urls.extend(urls)
 
-                    zipf_nosession_unique = set(zipf_nosession_all_urls)
-                    zipf_nosession_duplicates = len(zipf_nosession_all_urls) - len(zipf_nosession_unique)
+                        zipf_nosession_unique = set(zipf_nosession_all_urls)
+                        zipf_nosession_duplicates = len(zipf_nosession_all_urls) - len(zipf_nosession_unique)
+                        zipf_nosession_success = True
 
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Total URLs returned", len(zipf_nosession_all_urls))
-                    col2.metric("Unique URLs", len(zipf_nosession_unique))
-                    col3.metric("Duplicates", zipf_nosession_duplicates)
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Total URLs returned", len(zipf_nosession_all_urls))
+                        col2.metric("Unique URLs", len(zipf_nosession_unique))
+                        col3.metric("Duplicates", zipf_nosession_duplicates)
 
-                    st.info(f"Without sessions: {zipf_nosession_duplicates} duplicate URLs (expected - no deduplication)")
+                        st.info(f"Without sessions: {zipf_nosession_duplicates} duplicate URLs (expected - no deduplication)")
+                    except Exception as e:
+                        st.error(f"Error during Zipf no-session test: {str(e)}")
 
             # ============================================================
             # TEST EXA (no sessions - should have duplicates)
@@ -494,31 +521,34 @@ with tab2:
                 exa = clients["Exa.ai"]
 
                 with st.spinner("Running Exa searches..."):
-                    exa_results = []
-                    exa_all_urls = []
+                    try:
+                        exa_results = []
 
-                    for q in queries:
-                        result = exa.search(q, max_results=results_per_query)
-                        urls = [r.get("url", "") for r in result.get("results", [])]
-                        exa_results.append({
-                            "query": q,
-                            "urls": urls,
-                            "count": len(urls)
-                        })
-                        exa_all_urls.extend(urls)
+                        for q in queries:
+                            result = exa.search(q, max_results=results_per_query)
+                            urls = [r.get("url", "") for r in result.get("results", [])]
+                            exa_results.append({
+                                "query": q,
+                                "urls": urls,
+                                "count": len(urls)
+                            })
+                            exa_all_urls.extend(urls)
 
-                    exa_unique = set(exa_all_urls)
-                    exa_duplicates = len(exa_all_urls) - len(exa_unique)
+                        exa_unique = set(exa_all_urls)
+                        exa_duplicates = len(exa_all_urls) - len(exa_unique)
+                        exa_success = True
 
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Total URLs returned", len(exa_all_urls))
-                    col2.metric("Unique URLs", len(exa_unique))
-                    col3.metric("Duplicates", exa_duplicates)
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Total URLs returned", len(exa_all_urls))
+                        col2.metric("Unique URLs", len(exa_unique))
+                        col3.metric("Duplicates", exa_duplicates)
 
-                    if exa_duplicates > 0:
-                        st.info(f"Exa has no sessions: {exa_duplicates} duplicate URLs across searches")
-                    else:
-                        st.write("No duplicates (queries may have been different enough)")
+                        if exa_duplicates > 0:
+                            st.info(f"Exa has no sessions: {exa_duplicates} duplicate URLs across searches")
+                        else:
+                            st.write("No duplicates (queries may have been different enough)")
+                    except Exception as e:
+                        st.error(f"Error during Exa test: {str(e)}")
 
             # ============================================================
             # TEST FIRECRAWL (no sessions - should have duplicates)
@@ -531,31 +561,34 @@ with tab2:
                 fc = clients["Firecrawl"]
 
                 with st.spinner("Running Firecrawl searches..."):
-                    fc_results = []
-                    fc_all_urls = []
+                    try:
+                        fc_results = []
 
-                    for q in queries:
-                        result = fc.search(q, max_results=results_per_query)
-                        urls = [r.get("url", "") for r in result.get("results", [])]
-                        fc_results.append({
-                            "query": q,
-                            "urls": urls,
-                            "count": len(urls)
-                        })
-                        fc_all_urls.extend(urls)
+                        for q in queries:
+                            result = fc.search(q, max_results=results_per_query)
+                            urls = [r.get("url", "") for r in result.get("results", [])]
+                            fc_results.append({
+                                "query": q,
+                                "urls": urls,
+                                "count": len(urls)
+                            })
+                            fc_all_urls.extend(urls)
 
-                    fc_unique = set(fc_all_urls)
-                    fc_duplicates = len(fc_all_urls) - len(fc_unique)
+                        fc_unique = set(fc_all_urls)
+                        fc_duplicates = len(fc_all_urls) - len(fc_unique)
+                        fc_success = True
 
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Total URLs returned", len(fc_all_urls))
-                    col2.metric("Unique URLs", len(fc_unique))
-                    col3.metric("Duplicates", fc_duplicates)
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Total URLs returned", len(fc_all_urls))
+                        col2.metric("Unique URLs", len(fc_unique))
+                        col3.metric("Duplicates", fc_duplicates)
 
-                    if fc_duplicates > 0:
-                        st.info(f"Firecrawl has no sessions: {fc_duplicates} duplicate URLs across searches")
-                    else:
-                        st.write("No duplicates (queries may have been different enough)")
+                        if fc_duplicates > 0:
+                            st.info(f"Firecrawl has no sessions: {fc_duplicates} duplicate URLs across searches")
+                        else:
+                            st.write("No duplicates (queries may have been different enough)")
+                    except Exception as e:
+                        st.error(f"Error during Firecrawl test: {str(e)}")
 
             # ============================================================
             # SUMMARY
@@ -564,7 +597,7 @@ with tab2:
 
             summary_data = []
 
-            if "Zipf.ai" in clients:
+            if zipf_session_success:
                 summary_data.append({
                     "Provider": "Zipf.ai (with session)",
                     "Total URLs": len(zipf_session_all_urls),
@@ -572,6 +605,8 @@ with tab2:
                     "Duplicates": zipf_session_duplicates,
                     "Deduplication": "YES" if zipf_session_duplicates == 0 else "PARTIAL"
                 })
+
+            if zipf_nosession_success:
                 summary_data.append({
                     "Provider": "Zipf.ai (no session)",
                     "Total URLs": len(zipf_nosession_all_urls),
@@ -580,7 +615,7 @@ with tab2:
                     "Deduplication": "NO"
                 })
 
-            if "Exa.ai" in clients:
+            if exa_success:
                 summary_data.append({
                     "Provider": "Exa.ai",
                     "Total URLs": len(exa_all_urls),
@@ -589,7 +624,7 @@ with tab2:
                     "Deduplication": "NO (not supported)"
                 })
 
-            if "Firecrawl" in clients:
+            if fc_success:
                 summary_data.append({
                     "Provider": "Firecrawl",
                     "Total URLs": len(fc_all_urls),
