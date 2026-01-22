@@ -83,11 +83,13 @@ class ZipfClient:
         result = self._request("POST", "/search", payload)
 
         if "error" in result and "results" not in result:
+            # Combine error and message for clarity
+            error_msg = result.get("message", result.get("error", "Unknown error"))
             return {
                 "provider": self.name,
                 "query": query,
                 "latency_ms": result.get("latency_ms", 0),
-                "error": result.get("error", result.get("message", "Unknown error")),
+                "error": error_msg,
                 "results": [],
                 "result_count": 0,
                 "credits_used": "N/A"
