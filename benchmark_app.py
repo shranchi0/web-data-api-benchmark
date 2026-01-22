@@ -414,7 +414,8 @@ with tab2:
         fc_duplicates = 0
         fc_success = False
 
-        with results_container:
+        try:
+          with results_container:
             # ============================================================
             # TEST ZIPF WITH SESSIONS
             # ============================================================
@@ -649,6 +650,11 @@ with tab2:
                 - No re-processing same information
                 - More efficient token usage
                 """)
+
+        except Exception as e:
+            import traceback
+            st.error(f"Session test crashed: {str(e)}")
+            st.code(traceback.format_exc(), language="python")
 
 
 # ============================================================================
