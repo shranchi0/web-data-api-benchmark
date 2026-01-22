@@ -416,9 +416,12 @@ with tab2:
 
         try:
           with results_container:
+            progress_status = st.empty()
+
             # ============================================================
             # TEST ZIPF WITH SESSIONS
             # ============================================================
+            progress_status.info("Step 1/4: Testing Zipf.ai WITH session...")
             st.subheader("1. Zipf.ai WITH Session (should deduplicate)")
 
             if "Zipf.ai" not in clients:
@@ -426,94 +429,94 @@ with tab2:
             else:
                 zipf = clients["Zipf.ai"]
 
-                with st.spinner("Creating session and running searches..."):
-                    try:
-                        # Create session
-                        session_result = zipf._request("POST", "/sessions", {
-                            "name": f"benchmark_session_{datetime.now().strftime('%H%M%S')}",
-                            "description": "Deduplication test"
-                        })
+                try:
+                    # Create session
+                    session_result = zipf._request("POST", "/sessions", {
+                        "name": f"benchmark_session_{datetime.now().strftime('%H%M%S')}",
+                        "description": "Deduplication test"
+                    })
 
-                        session_data = session_result.get("session", session_result)
-                        session_id = session_data.get("id")
+                    session_data = session_result.get("session", session_result)
+                    session_id = session_data.get("id")
 
-                        if not session_id:
-                            st.error(f"Failed to create session: {session_result}")
-                        else:
-                            zipf_session_results = []
+                    if not session_id:
+                        st.error(f"Failed to create session: {session_result}")
+                    else:
+                        zipf_session_results = []
 
-                            for q in queries:
-                                result = zipf.search(q, max_results=results_per_query, session_id=session_id)
-                                urls = [r.get("url", "") for r in result.get("results", [])]
-                                zipf_session_results.append({
-                                    "query": q,
-                                    "urls": urls,
-                                    "count": len(urls)
-                                })
-                                zipf_session_all_urls.extend(urls)
-
-                            # Cleanup session
-                            zipf._request("DELETE", f"/sessions/{session_id}")
-
-                            # Analyze
-                            zipf_session_unique = set(zipf_session_all_urls)
-                            zipf_session_duplicates = len(zipf_session_all_urls) - len(zipf_session_unique)
-                            zipf_session_success = True
-
-                            col1, col2, col3 = st.columns(3)
-                            col1.metric("Total URLs returned", len(zipf_session_all_urls))
-                            col2.metric("Unique URLs", len(zipf_session_unique))
-                            col3.metric("Duplicates", zipf_session_duplicates,
-                                       delta="GOOD" if zipf_session_duplicates == 0 else "BAD",
-                                       delta_color="normal" if zipf_session_duplicates == 0 else "inverse")
-
-                            if zipf_session_duplicates == 0:
-                                st.success("Session deduplication WORKING - no duplicate URLs")
-                            else:
-                                st.error(f"Session deduplication FAILED - {zipf_session_duplicates} duplicates found")
-
-                            with st.expander("Details by query"):
-                                for r in zipf_session_results:
-                                    st.write(f"**{r['query'][:50]}...** → {r['count']} URLs")
-                    except Exception as e:
-                        st.error(f"Error during Zipf session test: {str(e)}")
-
-            # ============================================================
-            # TEST ZIPF WITHOUT SESSIONS (control)
-            # ============================================================
-            st.subheader("2. Zipf.ai WITHOUT Session (control group)")
-
-            if "Zipf.ai" in clients:
-                with st.spinner("Running searches without session..."):
-                    try:
-                        zipf_nosession_results = []
-
-                        for q in queries:
-                            result = zipf.search(q, max_results=results_per_query)  # No session_id
+                        for i, q in enumerate(queries):
+                            progress_status.info(f"Step 1/4: Zipf session search {i+1}/{len(queries)}...")
+                            result = zipf.search(q, max_results=results_per_query, session_id=session_id)
                             urls = [r.get("url", "") for r in result.get("results", [])]
-                            zipf_nosession_results.append({
+                            zipf_session_results.append({
                                 "query": q,
                                 "urls": urls,
                                 "count": len(urls)
                             })
-                            zipf_nosession_all_urls.extend(urls)
+                            zipf_session_all_urls.extend(urls)
 
-                        zipf_nosession_unique = set(zipf_nosession_all_urls)
-                        zipf_nosession_duplicates = len(zipf_nosession_all_urls) - len(zipf_nosession_unique)
-                        zipf_nosession_success = True
+                        # Cleanup session
+                        zipf._request("DELETE", f"/sessions/{session_id}")
+
+                        # Analyze
+                        zipf_session_unique = set(zipf_session_all_urls)
+                        zipf_session_duplicates = len(zipf_session_all_urls) - len(zipf_session_unique)
+                        zipf_session_success = True
 
                         col1, col2, col3 = st.columns(3)
-                        col1.metric("Total URLs returned", len(zipf_nosession_all_urls))
-                        col2.metric("Unique URLs", len(zipf_nosession_unique))
-                        col3.metric("Duplicates", zipf_nosession_duplicates)
+                        col1.metric("Total URLs returned", len(zipf_session_all_urls))
+                        col2.metric("Unique URLs", len(zipf_session_unique))
+                        col3.metric("Duplicates", zipf_session_duplicates)
 
-                        st.info(f"Without sessions: {zipf_nosession_duplicates} duplicate URLs (expected - no deduplication)")
-                    except Exception as e:
-                        st.error(f"Error during Zipf no-session test: {str(e)}")
+                        if zipf_session_duplicates == 0:
+                            st.success("Session deduplication WORKING - no duplicate URLs")
+                        else:
+                            st.warning(f"{zipf_session_duplicates} duplicates found")
+
+                        with st.expander("Details by query"):
+                            for r in zipf_session_results:
+                                st.write(f"**{r['query'][:50]}...** → {r['count']} URLs")
+                except Exception as e:
+                    st.error(f"Error during Zipf session test: {str(e)}")
+
+            # ============================================================
+            # TEST ZIPF WITHOUT SESSIONS (control)
+            # ============================================================
+            progress_status.info("Step 2/4: Testing Zipf.ai WITHOUT session...")
+            st.subheader("2. Zipf.ai WITHOUT Session (control group)")
+
+            if "Zipf.ai" in clients:
+                try:
+                    zipf_nosession_results = []
+
+                    for i, q in enumerate(queries):
+                        progress_status.info(f"Step 2/4: Zipf no-session search {i+1}/{len(queries)}...")
+                        result = zipf.search(q, max_results=results_per_query)  # No session_id
+                        urls = [r.get("url", "") for r in result.get("results", [])]
+                        zipf_nosession_results.append({
+                            "query": q,
+                            "urls": urls,
+                            "count": len(urls)
+                        })
+                        zipf_nosession_all_urls.extend(urls)
+
+                    zipf_nosession_unique = set(zipf_nosession_all_urls)
+                    zipf_nosession_duplicates = len(zipf_nosession_all_urls) - len(zipf_nosession_unique)
+                    zipf_nosession_success = True
+
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Total URLs returned", len(zipf_nosession_all_urls))
+                    col2.metric("Unique URLs", len(zipf_nosession_unique))
+                    col3.metric("Duplicates", zipf_nosession_duplicates)
+
+                    st.info(f"Without sessions: {zipf_nosession_duplicates} duplicate URLs (expected)")
+                except Exception as e:
+                    st.error(f"Error during Zipf no-session test: {str(e)}")
 
             # ============================================================
             # TEST EXA (no sessions - should have duplicates)
             # ============================================================
+            progress_status.info("Step 3/4: Testing Exa.ai...")
             st.subheader("3. Exa.ai (no session feature)")
 
             if "Exa.ai" not in clients:
@@ -521,39 +524,40 @@ with tab2:
             else:
                 exa = clients["Exa.ai"]
 
-                with st.spinner("Running Exa searches..."):
-                    try:
-                        exa_results = []
+                try:
+                    exa_results = []
 
-                        for q in queries:
-                            result = exa.search(q, max_results=results_per_query)
-                            urls = [r.get("url", "") for r in result.get("results", [])]
-                            exa_results.append({
-                                "query": q,
-                                "urls": urls,
-                                "count": len(urls)
-                            })
-                            exa_all_urls.extend(urls)
+                    for i, q in enumerate(queries):
+                        progress_status.info(f"Step 3/4: Exa search {i+1}/{len(queries)}...")
+                        result = exa.search(q, max_results=results_per_query)
+                        urls = [r.get("url", "") for r in result.get("results", [])]
+                        exa_results.append({
+                            "query": q,
+                            "urls": urls,
+                            "count": len(urls)
+                        })
+                        exa_all_urls.extend(urls)
 
-                        exa_unique = set(exa_all_urls)
-                        exa_duplicates = len(exa_all_urls) - len(exa_unique)
-                        exa_success = True
+                    exa_unique = set(exa_all_urls)
+                    exa_duplicates = len(exa_all_urls) - len(exa_unique)
+                    exa_success = True
 
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("Total URLs returned", len(exa_all_urls))
-                        col2.metric("Unique URLs", len(exa_unique))
-                        col3.metric("Duplicates", exa_duplicates)
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Total URLs returned", len(exa_all_urls))
+                    col2.metric("Unique URLs", len(exa_unique))
+                    col3.metric("Duplicates", exa_duplicates)
 
-                        if exa_duplicates > 0:
-                            st.info(f"Exa has no sessions: {exa_duplicates} duplicate URLs across searches")
-                        else:
-                            st.write("No duplicates (queries may have been different enough)")
-                    except Exception as e:
-                        st.error(f"Error during Exa test: {str(e)}")
+                    if exa_duplicates > 0:
+                        st.info(f"Exa: {exa_duplicates} duplicate URLs (no session feature)")
+                    else:
+                        st.write("No duplicates")
+                except Exception as e:
+                    st.error(f"Error during Exa test: {str(e)}")
 
             # ============================================================
             # TEST FIRECRAWL (no sessions - should have duplicates)
             # ============================================================
+            progress_status.info("Step 4/4: Testing Firecrawl...")
             st.subheader("4. Firecrawl (no session feature)")
 
             if "Firecrawl" not in clients:
@@ -561,39 +565,40 @@ with tab2:
             else:
                 fc = clients["Firecrawl"]
 
-                with st.spinner("Running Firecrawl searches..."):
-                    try:
-                        fc_results = []
+                try:
+                    fc_results = []
 
-                        for q in queries:
-                            result = fc.search(q, max_results=results_per_query)
-                            urls = [r.get("url", "") for r in result.get("results", [])]
-                            fc_results.append({
-                                "query": q,
-                                "urls": urls,
-                                "count": len(urls)
-                            })
-                            fc_all_urls.extend(urls)
+                    for i, q in enumerate(queries):
+                        progress_status.info(f"Step 4/4: Firecrawl search {i+1}/{len(queries)}...")
+                        result = fc.search(q, max_results=results_per_query)
+                        urls = [r.get("url", "") for r in result.get("results", [])]
+                        fc_results.append({
+                            "query": q,
+                            "urls": urls,
+                            "count": len(urls)
+                        })
+                        fc_all_urls.extend(urls)
 
-                        fc_unique = set(fc_all_urls)
-                        fc_duplicates = len(fc_all_urls) - len(fc_unique)
-                        fc_success = True
+                    fc_unique = set(fc_all_urls)
+                    fc_duplicates = len(fc_all_urls) - len(fc_unique)
+                    fc_success = True
 
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("Total URLs returned", len(fc_all_urls))
-                        col2.metric("Unique URLs", len(fc_unique))
-                        col3.metric("Duplicates", fc_duplicates)
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Total URLs returned", len(fc_all_urls))
+                    col2.metric("Unique URLs", len(fc_unique))
+                    col3.metric("Duplicates", fc_duplicates)
 
-                        if fc_duplicates > 0:
-                            st.info(f"Firecrawl has no sessions: {fc_duplicates} duplicate URLs across searches")
-                        else:
-                            st.write("No duplicates (queries may have been different enough)")
-                    except Exception as e:
-                        st.error(f"Error during Firecrawl test: {str(e)}")
+                    if fc_duplicates > 0:
+                        st.info(f"Firecrawl: {fc_duplicates} duplicate URLs (no session feature)")
+                    else:
+                        st.write("No duplicates")
+                except Exception as e:
+                    st.error(f"Error during Firecrawl test: {str(e)}")
 
             # ============================================================
             # SUMMARY
             # ============================================================
+            progress_status.success("Complete!")
             st.subheader("5. Summary")
 
             summary_data = []
