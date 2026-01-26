@@ -15,6 +15,17 @@ import sys
 sys.path.insert(0, ".")
 
 from clients import ZipfClient, ExaClient, FirecrawlClient
+from benchmarks import (
+    run_multi_step_benchmark,
+    compute_metrics,
+    get_scenario,
+    list_scenarios,
+    SCENARIOS,
+    verify_facts,
+    evaluate_coherence,
+    create_openai_config,
+    create_anthropic_config,
+)
 
 st.set_page_config(
     page_title="Web Data API Benchmark",
@@ -32,6 +43,10 @@ if "exa_key" not in st.session_state:
     st.session_state.exa_key = st.query_params.get("exa", "")
 if "firecrawl_key" not in st.session_state:
     st.session_state.firecrawl_key = st.query_params.get("firecrawl", "")
+if "openai_key" not in st.session_state:
+    st.session_state.openai_key = st.query_params.get("openai", "")
+if "anthropic_key" not in st.session_state:
+    st.session_state.anthropic_key = st.query_params.get("anthropic", "")
 
 
 def get_active_clients():
@@ -117,6 +132,14 @@ with st.sidebar:
     st.session_state.firecrawl_key = fc_key
 
     st.divider()
+    st.markdown("**LLM Evaluator Keys**")
+    st.caption("For Multi-Step Research eval")
+    openai_key = st.text_input("OpenAI", value=st.session_state.openai_key, type="password", key="o")
+    anthropic_key = st.text_input("Anthropic", value=st.session_state.anthropic_key, type="password", key="a")
+    st.session_state.openai_key = openai_key
+    st.session_state.anthropic_key = anthropic_key
+
+    st.divider()
     clients = get_active_clients()
 
     status_text = []
@@ -140,7 +163,7 @@ if len(clients) < 2:
     st.warning("Add at least 2 API keys to run comparisons")
     st.stop()
 
-tab1, tab2, tab3, tab4 = st.tabs(["Search Comparison", "Session Test (Key Differentiator)", "Crawl Comparison", "Export Data"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Search Comparison", "Session Test", "Multi-Step Research", "Crawl Comparison", "Export Data"])
 
 
 # ============================================================================
@@ -663,9 +686,367 @@ with tab2:
 
 
 # ============================================================================
-# TAB 3: CRAWL COMPARISON
+# TAB 3: MULTI-STEP RESEARCH BENCHMARK
 # ============================================================================
 with tab3:
+    st.header("Multi-Step Research Workflow Benchmark")
+
+    st.markdown("""
+    ### What This Tests
+
+    This benchmark evaluates how well search APIs support **coherent, multi-query research sessions**
+    where context from earlier queries should inform and improve later results.
+
+    **Key Metrics:**
+    - **Information Completeness (ICS)**: % of required facts found
+    - **Context Coherence (CCS)**: How well later results build on earlier queries
+    - **Deduplication Efficiency (DER)**: Reduction in redundant URLs
+    - **Research Velocity (RVI)**: Speed of achieving research objectives
+    - **Cost Efficiency (CES)**: Information value per API credit
+
+    **Hypothesis:** Session-aware APIs (Zipf) should outperform stateless APIs (Exa, Firecrawl).
+    """)
+
+    st.divider()
+
+    # Scenario selection
+    scenarios = list_scenarios()
+    scenario_options = {f"{s['name']} ({s['query_count']} queries, {s['fact_count']} facts)": s['id'] for s in scenarios}
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        selected_scenario_label = st.selectbox(
+            "Research Scenario",
+            options=list(scenario_options.keys()),
+            help="Select a predefined research scenario"
+        )
+    with col2:
+        max_results = st.number_input("Results/Query", min_value=5, max_value=20, value=10)
+
+    selected_scenario_id = scenario_options[selected_scenario_label]
+    scenario = get_scenario(selected_scenario_id)
+
+    # Show scenario details
+    with st.expander("Scenario Details", expanded=False):
+        st.markdown(f"**Goal:** {scenario.goal}")
+        st.markdown(f"**Intent Type:** `{scenario.intent_type}`")
+
+        st.markdown("**Query Sequence:**")
+        for i, q in enumerate(scenario.queries, 1):
+            st.code(f"{i}. {q}")
+
+        st.markdown(f"**Facts to Verify ({len(scenario.facts)}):**")
+        fact_data = [{"ID": f.id, "Description": f.description, "Category": f.category} for f in scenario.facts]
+        st.dataframe(fact_data, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Provider selection
+    st.subheader("Select Providers to Test")
+
+    provider_cols = st.columns(3)
+    with provider_cols[0]:
+        test_zipf = st.checkbox("Zipf.ai (with session)", value="Zipf.ai" in clients, disabled="Zipf.ai" not in clients)
+    with provider_cols[1]:
+        test_exa = st.checkbox("Exa.ai", value="Exa.ai" in clients, disabled="Exa.ai" not in clients)
+    with provider_cols[2]:
+        test_firecrawl = st.checkbox("Firecrawl", value="Firecrawl" in clients, disabled="Firecrawl" not in clients)
+
+    # LLM evaluation toggle
+    st.subheader("LLM Evaluation (Optional)")
+
+    llm_eval_enabled = st.checkbox(
+        "Enable LLM evaluation for fact verification and coherence scoring",
+        value=False,
+        help="Requires OpenAI or Anthropic API key"
+    )
+
+    llm_provider = None
+    if llm_eval_enabled:
+        llm_col1, llm_col2 = st.columns(2)
+        with llm_col1:
+            llm_provider = st.radio(
+                "LLM Provider",
+                options=["OpenAI (GPT-4o)", "Anthropic (Claude 3.5 Sonnet)"],
+                horizontal=True
+            )
+        with llm_col2:
+            if "OpenAI" in llm_provider and not st.session_state.openai_key:
+                st.warning("Add OpenAI key in sidebar")
+            elif "Anthropic" in llm_provider and not st.session_state.anthropic_key:
+                st.warning("Add Anthropic key in sidebar")
+
+    st.divider()
+
+    # Run benchmark
+    if st.button("Run Multi-Step Benchmark", type="primary"):
+        if not any([test_zipf, test_exa, test_firecrawl]):
+            st.error("Select at least one provider to test")
+            st.stop()
+
+        all_results = {}
+        all_metrics = {}
+
+        # Progress tracking
+        progress_container = st.container()
+
+        with progress_container:
+            overall_progress = st.progress(0)
+            status_text = st.empty()
+
+            providers_to_test = []
+            if test_zipf and "Zipf.ai" in clients:
+                providers_to_test.append(("Zipf.ai", clients["Zipf.ai"], True))
+            if test_exa and "Exa.ai" in clients:
+                providers_to_test.append(("Exa.ai", clients["Exa.ai"], False))
+            if test_firecrawl and "Firecrawl" in clients:
+                providers_to_test.append(("Firecrawl", clients["Firecrawl"], False))
+
+            total_steps = len(providers_to_test)
+            if llm_eval_enabled:
+                total_steps *= 2  # Double for LLM evaluation
+
+            current_step = 0
+
+            for provider_name, client, use_session in providers_to_test:
+                status_text.info(f"Running {provider_name}...")
+
+                # Create session for Zipf
+                session_id = None
+                if use_session and provider_name == "Zipf.ai":
+                    try:
+                        session_result = client._request("POST", "/sessions", {
+                            "name": f"multistep_benchmark_{datetime.now().strftime('%H%M%S')}",
+                            "description": f"Multi-step benchmark: {scenario.name}"
+                        })
+                        session_data = session_result.get("session", session_result)
+                        session_id = session_data.get("id")
+                    except Exception as e:
+                        st.warning(f"Could not create Zipf session: {e}")
+
+                # Define execution mode
+                from benchmarks.multi_step_benchmark import ExecutionMode
+                mode = ExecutionMode(
+                    name=f"{provider_name} ({'Session' if use_session else 'Stateless'})",
+                    description="",
+                    uses_session=use_session,
+                    injects_context=False,
+                )
+
+                # Run benchmark
+                try:
+                    result = run_multi_step_benchmark(
+                        scenario=scenario,
+                        client=client,
+                        mode=mode,
+                        max_results_per_query=max_results,
+                        session_id=session_id,
+                    )
+                    all_results[provider_name] = result
+                except Exception as e:
+                    st.error(f"Error running {provider_name}: {e}")
+                    all_results[provider_name] = {"error": str(e)}
+
+                # Cleanup Zipf session
+                if session_id:
+                    try:
+                        client._request("DELETE", f"/sessions/{session_id}")
+                    except:
+                        pass
+
+                current_step += 1
+                overall_progress.progress(current_step / total_steps)
+
+            # Run LLM evaluation if enabled
+            if llm_eval_enabled:
+                try:
+                    if "OpenAI" in llm_provider:
+                        llm_config = create_openai_config(st.session_state.openai_key)
+                    else:
+                        llm_config = create_anthropic_config(st.session_state.anthropic_key)
+
+                    for provider_name, result in all_results.items():
+                        if "error" in result:
+                            continue
+
+                        status_text.info(f"LLM evaluation for {provider_name}...")
+
+                        # Verify facts
+                        facts_to_verify = [{"id": f.id, "description": f.description} for f in scenario.facts]
+                        fact_results = verify_facts(
+                            config=llm_config,
+                            goal=scenario.goal,
+                            facts=facts_to_verify,
+                            content=result.get("all_content", ""),
+                        )
+
+                        # Evaluate coherence
+                        coherence_results = evaluate_coherence(
+                            config=llm_config,
+                            goal=scenario.goal,
+                            query_results=result.get("query_results", []),
+                        )
+
+                        # Compute metrics with LLM results
+                        metrics = compute_metrics(
+                            benchmark_result=result,
+                            fact_results=fact_results,
+                            coherence_results=coherence_results,
+                        )
+                        all_metrics[provider_name] = {
+                            "metrics": metrics,
+                            "fact_results": fact_results,
+                            "coherence_results": coherence_results,
+                        }
+
+                        current_step += 1
+                        overall_progress.progress(current_step / total_steps)
+
+                except Exception as e:
+                    st.error(f"LLM evaluation error: {e}")
+                    # Compute metrics without LLM
+                    for provider_name, result in all_results.items():
+                        if "error" not in result:
+                            metrics = compute_metrics(result)
+                            all_metrics[provider_name] = {"metrics": metrics}
+            else:
+                # Compute metrics without LLM
+                for provider_name, result in all_results.items():
+                    if "error" not in result:
+                        metrics = compute_metrics(result)
+                        all_metrics[provider_name] = {"metrics": metrics}
+
+            status_text.success("Benchmark complete!")
+            overall_progress.progress(1.0)
+
+        # Store results in history
+        st.session_state.history.append({
+            "timestamp": datetime.now().isoformat(),
+            "type": "multi_step",
+            "scenario": scenario.id,
+            "scenario_name": scenario.name,
+            "results": all_results,
+            "metrics": all_metrics,
+        })
+
+        # ============================================================
+        # DISPLAY RESULTS
+        # ============================================================
+
+        st.divider()
+        st.subheader("Results Summary")
+
+        # Summary metrics table
+        summary_data = []
+        for provider_name in all_results.keys():
+            if provider_name in all_metrics:
+                m = all_metrics[provider_name]["metrics"]
+                summary_data.append({
+                    "Provider": provider_name,
+                    "Unique URLs": m.get("unique_urls", 0),
+                    "Duplicates": m.get("duplicate_urls", 0),
+                    "DER": f"{m.get('deduplication_efficiency_ratio', 0):.2%}",
+                    "Domains": m.get("unique_domains", 0),
+                    "Latency (s)": f"{m.get('total_latency_ms', 0)/1000:.1f}",
+                    "Credits": m.get("total_credits", "N/A"),
+                    "ICS": f"{m.get('information_completeness_score', 'N/A')}%" if m.get('information_completeness_score') else "N/A",
+                    "CCS": f"{m.get('context_coherence_score', 'N/A'):.2f}" if m.get('context_coherence_score') else "N/A",
+                })
+
+        if summary_data:
+            summary_df = pd.DataFrame(summary_data)
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+        # Deduplication comparison
+        st.subheader("Deduplication Analysis")
+        st.markdown("**Key insight:** Zipf with sessions should show 0 duplicates while stateless APIs may have duplicates.")
+
+        dedup_cols = st.columns(len(all_results))
+        for i, (provider_name, result) in enumerate(all_results.items()):
+            if "error" in result:
+                continue
+            with dedup_cols[i]:
+                st.markdown(f"**{provider_name}**")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Total URLs", result.get("total_urls", 0))
+                col2.metric("Unique", result.get("unique_urls", 0))
+                col3.metric("Duplicates", result.get("duplicate_urls", 0))
+
+                if result.get("duplicate_urls", 0) == 0:
+                    st.success("No duplicates")
+                else:
+                    st.warning(f"{result.get('duplicate_urls', 0)} duplicates")
+
+        # Query-by-query breakdown
+        st.subheader("Query-by-Query Results")
+
+        for provider_name, result in all_results.items():
+            if "error" in result:
+                continue
+
+            with st.expander(f"{provider_name} - Query Details"):
+                for qr in result.get("query_results", []):
+                    st.markdown(f"**Q{qr['step']}: {qr['query'][:60]}...**")
+                    st.caption(f"Results: {qr['result_count']} | Latency: {qr['latency_ms']:.0f}ms | Credits: {qr['credits_used']}")
+
+                    if qr.get("urls"):
+                        with st.expander(f"URLs ({len(qr['urls'])})"):
+                            for url in qr["urls"][:5]:
+                                st.code(url, language=None)
+                            if len(qr["urls"]) > 5:
+                                st.caption(f"... and {len(qr['urls'])-5} more")
+
+        # LLM Evaluation Results
+        if llm_eval_enabled and any("fact_results" in m for m in all_metrics.values()):
+            st.subheader("LLM Evaluation Results")
+
+            for provider_name, metric_data in all_metrics.items():
+                if "fact_results" not in metric_data:
+                    continue
+
+                with st.expander(f"{provider_name} - Fact Verification"):
+                    fact_results = metric_data["fact_results"]
+                    found = sum(1 for f in fact_results if f["status"] == "FOUND")
+                    partial = sum(1 for f in fact_results if f["status"] == "PARTIAL")
+                    not_found = len(fact_results) - found - partial
+
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Found", found)
+                    col2.metric("Partial", partial)
+                    col3.metric("Not Found", not_found)
+
+                    fact_df = pd.DataFrame([
+                        {
+                            "Fact": f["fact_description"][:50] + "...",
+                            "Status": f["status"],
+                            "Confidence": f["confidence"],
+                            "Evidence": f["evidence"][:100] + "..." if len(f.get("evidence", "")) > 100 else f.get("evidence", "")
+                        }
+                        for f in fact_results
+                    ])
+                    st.dataframe(fact_df, use_container_width=True, hide_index=True)
+
+                if "coherence_results" in metric_data:
+                    with st.expander(f"{provider_name} - Context Coherence"):
+                        coherence_results = metric_data["coherence_results"]
+                        avg_score = sum(c["score"] for c in coherence_results) / len(coherence_results)
+                        st.metric("Average Coherence", f"{avg_score:.2f}")
+
+                        coh_df = pd.DataFrame([
+                            {
+                                "Query": f"Q{c['query_number']}: {c['query'][:40]}...",
+                                "Score": f"{c['score']:.2f}",
+                                "Reasoning": c["reasoning"][:100] + "..." if len(c.get("reasoning", "")) > 100 else c.get("reasoning", "")
+                            }
+                            for c in coherence_results
+                        ])
+                        st.dataframe(coh_df, use_container_width=True, hide_index=True)
+
+
+# ============================================================================
+# TAB 4: CRAWL COMPARISON
+# ============================================================================
+with tab4:
     st.header("Crawl/Extract Comparison")
 
     url = st.text_input("URL to crawl", value="", placeholder="https://example.com")
@@ -764,9 +1145,9 @@ with tab3:
 
 
 # ============================================================================
-# TAB 4: EXPORT
+# TAB 5: EXPORT
 # ============================================================================
-with tab4:
+with tab5:
     st.header("Export Data")
 
     if not st.session_state.history:
@@ -782,6 +1163,13 @@ with tab4:
                     "Time": entry["timestamp"][:19],
                     "Type": "Search",
                     "Input": entry["query"][:50] + "...",
+                    "Providers": ", ".join(entry["results"].keys())
+                })
+            elif entry["type"] == "multi_step":
+                summary_data.append({
+                    "Time": entry["timestamp"][:19],
+                    "Type": "Multi-Step",
+                    "Input": entry.get("scenario_name", entry.get("scenario", ""))[:50] + "...",
                     "Providers": ", ".join(entry["results"].keys())
                 })
             else:
